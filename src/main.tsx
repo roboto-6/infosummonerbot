@@ -38,6 +38,20 @@ Devvit.configure({
 // ============================================================================
 Devvit.addSettings([
   {
+    // Purely informational - this field isn't read anywhere in the bot's
+    // code. It exists only to give the command builder link its own
+    // clearly separated, easy-to-copy spot on the settings page, since
+    // Devvit's helpText doesn't render line breaks or clickable links well
+    // enough to bury a URL inside a longer paragraph. Safe if a mod edits
+    // or clears it - nothing depends on this value.
+    type: 'string',
+    name: 'command_builder_link',
+    label: 'Command Builder Tool',
+    helpText: 'Use this link to your command list visually, then paste the resulting JSON into "Bot Responses" box below.',
+    defaultValue: 'https://roboto-6.github.io/infosummonerbot/command-builder.html',
+    scope: SettingScope.Installation,
+  },
+  {
     // The master list of commands. Each entry can be either:
     //  - A plain string response (no category - shows as "Uncategorized")
     //  - An object { "category": "...", "text": "..." } for a categorized
