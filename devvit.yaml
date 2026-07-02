@@ -1,5 +1,5 @@
 name: infosummonerbot
-version: 0.2.11
+version: 0.3.0
 main: src/main.tsx
 description: |
   A customizable summon bot that lets any user call up helpful information by commenting trigger commands (e.g., !caresheet). Unlike mod-only tools, this allows your entire community to share resources with each other.
