@@ -145,6 +145,11 @@ For issues or questions, visit r/infosummonerbot or check the documentation at h
 
 # Change History
 
+## 0.4.0
+- Updated to use Reddit API 0.13.6
+- Began the process of migrating from blocks to Devvit Web, removed depreciated hooks. 
+- Replaced the custom post with a plain text post to better work across device types.
+
 ## 0.3.0
 - Fixed the dictionary display feature
 - Added the ability to categorize commands

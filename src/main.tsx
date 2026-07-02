@@ -1,4 +1,4 @@
-import { Devvit, SettingScope, useAsync } from '@devvit/public-api';
+import { Devvit, SettingScope } from '@devvit/public-api';
 
 /**
  * ============================================================================
@@ -15,14 +15,29 @@ import { Devvit, SettingScope, useAsync } from '@devvit/public-api';
  *  - Redis holds only small runtime bookkeeping: per-post cooldowns, ping
  *    counts, and the dictionary post's ID + its per-command comment IDs.
  *
- * IMPORTANT ENVIRONMENT NOTE (as of this version):
- * This project pins "@devvit/public-api" to 0.12.23 in package.json.
- * @devvit/public-api@0.13.6 (the version that installs via `@latest` right
- * now) is missing/breaks `Devvit.addCustomPostType`, which this bot depends
- * on for the dictionary post. Do NOT bump @devvit/public-api past 0.12.23
- * without testing - it will break the dictionary post again. The `devvit`
- * CLI package itself (the build/upload tool) is separate and fine to keep
- * current.
+ * ENVIRONMENT NOTE:
+ * This project pins "@devvit/public-api" to 0.13.6 in package.json.
+ * @devvit/public-api@0.13.6 removed the interactive Blocks custom-post
+ * system entirely (addCustomPostType stopped working, and the hooks -
+ * useAsync, useState, etc. - it depended on were removed outright). Do NOT
+ * bump @devvit/public-api past 0.13.6 without testing.
+ *
+ * The dictionary post itself was deliberately kept as a plain text post
+ * (not a custom post type) specifically to avoid that broken system - see
+ * the "Update Command Dictionary" menu item below. A brief attempt was made
+ * to migrate to Devvit Web (a separate, newer post/server architecture)
+ * instead, but mixing Devvit Web's "post"/"server" config with this file's
+ * "blocks" config in the same devvit.json broke post rendering entirely
+ * (confirmed via testing, not just suspected) - so that path was abandoned
+ * in favor of this simpler, fully-working plain-text-post approach.
+ *
+ * Longer term, Blocks itself is being phased out platform-wide in favor of
+ * Devvit Web, and a full migration of this entire file (settings, menu
+ * items, the comment trigger) off Blocks will likely be necessary
+ * eventually. That's a deliberately deferred, separate future project, not
+ * something to bundle into small fixes - addSettings/addMenuItem/addTrigger
+ * (used throughout this file) are still working and officially supported
+ * for now.
  * ============================================================================
  */
 
@@ -259,21 +274,21 @@ Devvit.addMenuItem({
  * comments. Run this any time commands are added/changed in settings, to
  * refresh what's shown in the dictionary post.
  *
+ * This is a plain text post, not a custom/interactive post type - its body
+ * is a categorized, linked index of every command (reusing the same link
+ * format as the "!command-list" auto-generated command below), and each
+ * command's full response text lives in its own comment beneath the post.
+ * A plain text post has no fixed-height canvas or scrolling limitation,
+ * unlike a Blocks custom post - it just scrolls like any normal post.
+ *
  * Flow:
  *  1. Reuse the existing dictionary post if we have one saved in Redis and
  *     it still exists / hasn't been removed. Otherwise create a new one.
- *  2. Delete old per-command comments (each command gets its own comment
- *     holding the full response text, linked to from the dictionary UI so
- *     long responses aren't crammed into the small post view).
- *  3. Post a fresh comment per command and save its ID in Redis so the
- *     dictionary UI can link out to it.
+ *  2. Delete old per-command comments, then post fresh ones holding each
+ *     command's full response text.
+ *  3. Edit the post body itself to a categorized list of links to those
+ *     comments.
  *  4. Lock the post so only the bot's comments live there.
- *
- * Note: this reuses the same post/URL across updates rather than creating a
- * new one each time, so links to the dictionary post stay stable. If you
- * want it pinned to the top of the sub, pin it manually from Reddit's post
- * menu - that survives content updates fine, since this only edits comments,
- * not the post itself.
  */
 Devvit.addMenuItem({
   label: 'Update Command Dictionary',
@@ -285,6 +300,7 @@ Devvit.addMenuItem({
     try {
       const subreddit = await reddit.getCurrentSubreddit();
       const responses = await getResponses(context);
+      const categories = await getCategories(context);
       const triggers = Object.keys(responses).sort();
 
       if (triggers.length === 0) {
@@ -298,38 +314,32 @@ Devvit.addMenuItem({
       let needsNewPost = false;
 
       if (existingPostId) {
-        // Try to reuse the existing post
         try {
           dictionaryPost = await reddit.getPostById(existingPostId);
 
-          // A mod/admin removed our post - start fresh instead of
-          // continuing to reference a dead post.
           if (dictionaryPost.removed) {
             console.log('Dictionary post was removed, creating new one');
             needsNewPost = true;
           } else {
-            // Unlock post for editing
             await dictionaryPost.unlock();
 
-            // Delete old comments (with delays to avoid rate limiting)
+            // Delete old per-command comments (with delays to avoid rate
+            // limiting) before posting fresh ones.
             const oldCommentIds = await redis.hGetAll('comment_ids');
             const oldIds = Object.values(oldCommentIds);
             for (let i = 0; i < oldIds.length; i++) {
               try {
                 if (i > 0) {
-                  await new Promise(resolve => setTimeout(resolve, 2000));
+                  await new Promise((resolve) => setTimeout(resolve, 2000));
                 }
                 const comment = await reddit.getCommentById(oldIds[i]);
                 await comment.delete();
               } catch (e) {
-                // Non-fatal: comment may already be gone. Log and continue.
                 console.log(`Could not delete comment ${oldIds[i]}: ${e}`);
               }
             }
-
-            // Wait before posting new comments
             if (oldIds.length > 0) {
-              await new Promise(resolve => setTimeout(resolve, 3000));
+              await new Promise((resolve) => setTimeout(resolve, 3000));
             }
           }
         } catch (e) {
@@ -341,24 +351,21 @@ Devvit.addMenuItem({
       }
 
       if (needsNewPost) {
-        // Create new dictionary post. This `preview` is what shows briefly
-        // before the custom post's `render()` (below) takes over.
         dictionaryPost = await reddit.submitPost({
           title: '📖 Bot Command Dictionary',
           subredditName: subreddit.name,
-          preview: (
-            <vstack padding="medium" gap="medium">
-              <text size="xlarge" weight="bold">📖 Command Dictionary</text>
-              <text>Loading commands...</text>
-            </vstack>
-          ),
+          text: 'Generating dictionary...',
         });
 
         await redis.set('dictionary_post_id', dictionaryPost.id);
         await redis.del('comment_ids');
       }
 
-      // Post one comment per command holding its full response text
+      if (!dictionaryPost) {
+        throw new Error('Dictionary post is unexpectedly missing after create/reuse step');
+      }
+
+      // Post one comment per command holding its full response text.
       const newCommentIds: Record<string, string> = {};
 
       for (let i = 0; i < triggers.length; i++) {
@@ -366,21 +373,26 @@ Devvit.addMenuItem({
         const response = responses[trigger];
         const commentText = `## ${trigger}\n\n${response}`;
 
-        // 6s delay between comments to avoid Reddit rate limits when there
-        // are many commands - this loop can take a while for large lists.
         if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 6000));
+          await new Promise((resolve) => setTimeout(resolve, 6000));
         }
 
-        const comment = await dictionaryPost.addComment({
-          text: commentText,
-        });
-
+        const comment = await dictionaryPost.addComment({ text: commentText });
         newCommentIds[trigger] = comment.id;
       }
 
-      // Save comment IDs and lock post
       await redis.hSet('comment_ids', newCommentIds);
+
+      // Edit the post body to a categorized, linked index of all commands.
+      const body = buildDictionaryPostBody(
+        responses,
+        categories,
+        newCommentIds,
+        subreddit.name,
+        dictionaryPost.id
+      );
+      await dictionaryPost.edit({ text: body });
+
       await dictionaryPost.lock();
 
       ui.showToast(`Dictionary updated with ${triggers.length} commands`);
@@ -391,288 +403,42 @@ Devvit.addMenuItem({
   },
 });
 
-// ============================================================================
-// COMMAND DICTIONARY - interactive custom post
-// ============================================================================
 /**
- * Renders the browsable command list inside the dictionary post created
- * above. Devvit re-runs `render()` whenever the post needs to draw itself.
- *
- * DATA LOADING - THIS IS THE PIECE THAT WAS FIXED:
- * Data (the command list + comment ID map) now loads via `useAsync`, which
- * runs the fetch once when the post renders and gives back a `loading` flag
- * automatically.
- *
- * Why the previous approach got stuck on "Loading commands...": it kicked
- * off the data-fetching promise directly inside the render function body
- * (`if (!loaded) { getResponses(...).then(...) }`), not through a Devvit
- * hook. Devvit only knows to re-render a custom post in response to its own
- * hooks (useState, useAsync, useInterval, etc.) - state changes coming from
- * a raw, unmanaged promise chain aren't guaranteed to trigger that re-render
- * the way a hook's state update does. So `setLoaded(true)` could fire
- * without ever prompting Devvit to actually redraw the post, leaving it
- * stuck showing the loading state forever even after the data had finished
- * loading behind the scenes. `useAsync` avoids this because Devvit manages
- * the whole load-and-re-render cycle itself.
- *
- * IMPORTANT API NOTE FOR THIS PACKAGE VERSION (@devvit/public-api@0.12.23):
- * Unlike `useState` and `useInterval`, `useAsync` is NOT a property on the
- * `context` object in this version - it must be imported directly from
- * '@devvit/public-api' (see the import at the top of this file) and called
- * as a standalone function. Calling `context.useAsync(...)` here will throw
- * "useAsync is not a function" at runtime, even though TypeScript may not
- * always flag it depending on how `context` is typed.
+ * Builds the categorized markdown body for the dictionary post itself: one
+ * "## Category" heading per category, each followed by a bulleted, linked
+ * list of its commands (reusing buildCommandListMarkdown, defined below).
+ * Categories are sorted alphabetically, with "Uncategorized" always last.
  */
-// How many commands to show per page within a single category. Devvit's
-// fixed-height canvas (512px for 'tall') has no exact per-element pixel
-// values exposed to app code, so this number is a conservative starting
-// estimate, not a precise calculation - if rows are getting clipped at the
-// bottom of the screen with real content, lower this; if there's a lot of
-// empty space, raise it.
-const COMMANDS_PER_PAGE = 4;
+function buildDictionaryPostBody(
+  responses: Record<string, string>,
+  categories: Record<string, string>,
+  commentIds: Record<string, string>,
+  subredditName: string,
+  dictionaryPostId: string
+): string {
+  const UNCATEGORIZED = 'Uncategorized';
+  const grouped: Record<string, string[]> = {};
 
-Devvit.addCustomPostType({
-  name: 'Command Dictionary',
-  height: 'tall',
-  render: (context) => {
-    const { redis } = context;
+  for (const trigger of Object.keys(responses)) {
+    const category = categories[trigger] || UNCATEGORIZED;
+    if (!grouped[category]) grouped[category] = [];
+    grouped[category].push(trigger);
+  }
 
-    // Devvit custom posts have a fixed canvas (max height is 'tall' - there
-    // is no scrolling and no bigger size available). A flat list of every
-    // command across every category can easily run off the bottom of that
-    // fixed area with nothing to scroll it into view. To keep this usable
-    // regardless of how many commands get added, the post shows a compact
-    // category picker first, and only expands into a given category's full
-    // command list when tapped - so each individual screen stays short.
-    // Within a category, commands are further split into pages (see
-    // COMMANDS_PER_PAGE above) in case a single category itself grows
-    // large enough to overflow the fixed canvas.
-    const [selectedCategory, setSelectedCategory] = context.useState<string | null>(null);
-    const [page, setPage] = context.useState<number>(0);
+  const categoryNames = Object.keys(grouped).sort((a, b) => {
+    if (a === UNCATEGORIZED) return 1;
+    if (b === UNCATEGORIZED) return -1;
+    return a.localeCompare(b);
+  });
 
-    // Loads the command list (from settings) and the comment ID map (from
-    // Redis) together, once, when this post renders. `loading` and `error`
-    // are provided automatically - no manual state juggling needed.
-    const { data, loading, error } = useAsync(async () => {
-      const [responses, commentIds, categories, subreddit] = await Promise.all([
-        getResponses(context),
-        redis.hGetAll('comment_ids'),
-        getCategories(context),
-        context.reddit.getCurrentSubreddit(),
-      ]);
-      return {
-        responses: responses || {},
-        commentIds: commentIds || {},
-        categories: categories || {},
-        subredditName: subreddit.name,
-      };
-    });
+  const sections = categoryNames.map((category) => {
+    const list = buildCommandListMarkdown(grouped[category], commentIds, subredditName, dictionaryPostId);
+    return `## ${category}\n\n${list}`;
+  });
 
-    if (loading) {
-      return (
-        <vstack padding="medium" alignment="center middle" grow>
-          <text size="large">Loading commands...</text>
-        </vstack>
-      );
-    }
+  return sections.join('\n\n');
+}
 
-    if (error || !data) {
-      // Surfaces real load failures instead of looking identical to the
-      // old "stuck loading" bug - makes future debugging much faster.
-      console.error('[Dictionary] Error loading data:', error);
-      return (
-        <vstack padding="medium" gap="medium" alignment="center middle" grow>
-          <text size="large" weight="bold">Couldn't load commands</text>
-          <text size="small" color="gray">Check the logs, or try refreshing.</text>
-        </vstack>
-      );
-    }
-
-    const triggers = Object.keys(data.responses).sort();
-
-    if (triggers.length === 0) {
-      return (
-        <vstack padding="medium" gap="medium" alignment="center middle" grow>
-          <text size="xlarge" weight="bold">📖 Command Dictionary</text>
-          <text color="gray">No commands configured yet</text>
-          <text size="small" color="gray">Moderators: Add commands in app settings</text>
-        </vstack>
-      );
-    }
-
-    // Group triggers by category for easier skimming. Anything without a
-    // category assigned in settings falls into "Uncategorized" rather than
-    // being dropped or erroring out.
-    const UNCATEGORIZED = 'Uncategorized';
-    const groupedTriggers: Record<string, string[]> = {};
-    for (const trigger of triggers) {
-      const category = data.categories[trigger] || UNCATEGORIZED;
-      if (!groupedTriggers[category]) groupedTriggers[category] = [];
-      groupedTriggers[category].push(trigger);
-    }
-
-    // Alphabetical by category name, but "Uncategorized" always sorts last
-    // so miscellaneous commands don't interrupt the meaningful categories.
-    const categoryNames = Object.keys(groupedTriggers).sort((a, b) => {
-      if (a === UNCATEGORIZED) return 1;
-      if (b === UNCATEGORIZED) return -1;
-      return a.localeCompare(b);
-    });
-
-    // SCREEN 1: category picker (default view). Shows just category names
-    // and counts - compact enough to always fit, no matter how many
-    // commands exist underneath.
-    if (!selectedCategory) {
-      return (
-        <vstack padding="medium" gap="small" grow>
-          <vstack gap="small" padding="medium" backgroundColor="neutral-background-weak" cornerRadius="small">
-            <text size="xxlarge" weight="bold">📖 Command Dictionary</text>
-            <text size="medium" color="gray">{triggers.length} commands available</text>
-            <text size="small" color="gray" wrap>
-              Tap a category to view its commands
-            </text>
-          </vstack>
-
-          <vstack gap="small" padding="small">
-            {categoryNames.map((category) => (
-              <hstack
-                key={category}
-                gap="small"
-                padding="medium"
-                backgroundColor="neutral-background"
-                cornerRadius="small"
-                border="thin"
-                borderColor="neutral-border"
-                alignment="middle"
-                onPress={() => {
-                  setSelectedCategory(category);
-                  setPage(0); // reset to page 1 whenever a new category is opened
-                }}
-              >
-                <text size="large" weight="bold" color="primary" grow>
-                  {category}
-                </text>
-                <text size="medium" color="gray">
-                  {groupedTriggers[category].length} →
-                </text>
-              </hstack>
-            ))}
-          </vstack>
-
-          <vstack padding="medium" backgroundColor="neutral-background-weak" cornerRadius="small">
-            <text size="small" color="gray" wrap>
-              Use these commands by commenting on any post. Add @OP to ping the original poster or @above to ping the person you're replying to.
-            </text>
-          </vstack>
-        </vstack>
-      );
-    }
-
-    // SCREEN 2: a single category's commands, with a back button to
-    // return to the picker. `selectedCategory` could in theory point to a
-    // category that no longer exists (e.g. settings changed while this was
-    // open) - fall back to an empty list rather than crashing.
-    const triggersInCategory = groupedTriggers[selectedCategory] ?? [];
-
-    // Paginate within the category - a single category (e.g. a big
-    // "Diseases" list) can itself outgrow the fixed canvas just like the
-    // full flat list used to. `page` is clamped so it can't land past the
-    // last valid page if the command list shrinks while paged in.
-    const totalPages = Math.max(1, Math.ceil(triggersInCategory.length / COMMANDS_PER_PAGE));
-    const currentPage = Math.min(page, totalPages - 1);
-    const pageStart = currentPage * COMMANDS_PER_PAGE;
-    const pagedTriggers = triggersInCategory.slice(pageStart, pageStart + COMMANDS_PER_PAGE);
-
-    return (
-      <vstack padding="medium" gap="small" grow>
-        <hstack gap="small" alignment="middle">
-          <button
-            onPress={() => setSelectedCategory(null)}
-            appearance="secondary"
-            size="small"
-          >
-            ← All Categories
-          </button>
-        </hstack>
-
-        <vstack gap="small" padding="medium" backgroundColor="neutral-background-weak" cornerRadius="small">
-          <text size="xxlarge" weight="bold">{selectedCategory}</text>
-          <text size="medium" color="gray">{triggersInCategory.length} commands</text>
-        </vstack>
-
-        <vstack gap="small" padding="small" grow>
-          {pagedTriggers.map((trigger) => {
-            const commentId = data.commentIds[trigger];
-            const hasComment = !!commentId;
-
-            return (
-              <hstack
-                key={trigger}
-                gap="small"
-                padding="medium"
-                backgroundColor="neutral-background"
-                cornerRadius="small"
-                border="thin"
-                borderColor="neutral-border"
-                alignment="middle"
-              >
-                <vstack gap="small" grow>
-                  <text size="large" weight="bold" color="primary">!{trigger}</text>
-                  {!hasComment && (
-                    <text size="small" color="orange">Full text not yet posted</text>
-                  )}
-                </vstack>
-                {hasComment && (
-                  <button
-                    onPress={() => {
-                      // Devvit IDs come back with their type prefix attached
-                      // (posts: "t3_...", comments: "t1_..."). Those prefixes
-                      // must be stripped for a working reddit.com URL - a
-                      // link built from the raw prefixed IDs 404s/misroutes.
-                      const cleanPostId = context.postId?.replace(/^t3_/, '');
-                      const cleanCommentId = commentId.replace(/^t1_/, '');
-                      context.ui.navigateTo(
-                        `https://www.reddit.com/r/${data.subredditName}/comments/${cleanPostId}/comment/${cleanCommentId}/`
-                      );
-                    }}
-                    appearance="secondary"
-                    size="small"
-                  >
-                    View Full Text →
-                  </button>
-                )}
-              </hstack>
-            );
-          })}
-        </vstack>
-
-        {totalPages > 1 && (
-          <hstack gap="small" alignment="middle center">
-            <button
-              onPress={() => setPage(Math.max(0, currentPage - 1))}
-              appearance="secondary"
-              size="small"
-              disabled={currentPage === 0}
-            >
-              ← Prev
-            </button>
-            <text size="small" color="gray">
-              Page {currentPage + 1} of {totalPages}
-            </text>
-            <button
-              onPress={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
-              appearance="secondary"
-              size="small"
-              disabled={currentPage >= totalPages - 1}
-            >
-              Next →
-            </button>
-          </hstack>
-        )}
-      </vstack>
-    );
-  },
-});
 
 // ============================================================================
 // AUTO-GENERATED "LIST" COMMANDS
