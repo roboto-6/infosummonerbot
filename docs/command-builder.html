@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bot Command Builder</title>
+<style>
+  :root {
+    --bg: #10161b;
+    --bg-panel: #161d24;
+    --bg-inset: #0c1116;
+    --border: #263039;
+    --border-soft: #1c252d;
+    --text: #e7edf2;
+    --text-dim: #8ea0ac;
+    --text-faint: #5c6b76;
+    --accent: #2dd4bf;
+    --accent-dim: #1a9c8c;
+    --accent-soft: rgba(45, 212, 191, 0.12);
+    --amber: #e0a458;
+    --red: #e0705a;
+    --radius: 10px;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  header {
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--border-soft);
+    padding-bottom: 24px;
+  }
+
+  header .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  h1 {
+    font-size: 28px;
+    font-weight: 650;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+
+  header p {
+    color: var(--text-dim);
+    margin: 0;
+    font-size: 15px;
+    max-width: 60ch;
+  }
+
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 20px;
+  }
+
+  .panel-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .panel-title h2 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0;
+  }
+
+  .panel-title .count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+
+  .panel-desc {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin: 4px 0 16px;
+  }
+
+  details.import-details summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-dim);
+    user-select: none;
+    list-style: none;
+  }
+  details.import-details summary::-webkit-details-marker { display: none; }
+  details.import-details summary::before {
+    content: "▸ ";
+    color: var(--accent);
+  }
+  details.import-details[open] summary::before {
+    content: "▾ ";
+  }
+  details.import-details {
+    margin-bottom: 6px;
+  }
+  .import-body {
+    margin-top: 12px;
+  }
+
+  label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    letter-spacing: 0.01em;
+  }
+
+  input[type="text"], textarea {
+    width: 100%;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: var(--sans);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  input[type="text"]:focus, textarea:focus, [contenteditable]:focus {
+    border-color: var(--accent-dim);
+  }
+
+  textarea { resize: vertical; font-family: var(--mono); font-size: 12.5px; }
+
+  .field { margin-bottom: 16px; }
+  .field-row { display: flex; gap: 14px; }
+  .field-row .field { flex: 1; min-width: 0; }
+  .hint { font-size: 12px; color: var(--text-faint); margin-top: 6px; font-family: var(--mono); }
+  .hint strong { color: var(--accent); font-weight: 600; }
+
+  .toolbar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar button {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 6px;
+    width: 34px;
+    height: 32px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.12s;
+  }
+  .toolbar button:hover { border-color: var(--accent-dim); color: var(--text); }
+  .toolbar button.active { background: var(--accent-soft); border-color: var(--accent-dim); color: var(--accent); }
+  .toolbar button b { font-weight: 700; }
+  .toolbar button i { font-style: italic; }
+
+  .editor {
+    min-height: 130px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+  .editor:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-faint);
+  }
+  .editor a { color: var(--accent); }
+  .editor ul, .editor ol { margin: 4px 0; padding-left: 22px; }
+  .editor h1, .editor h2, .editor h3 { margin: 10px 0 6px; line-height: 1.25; font-weight: 700; }
+  .editor h1 { font-size: 20px; }
+  .editor h2 { font-size: 17px; }
+  .editor h3 { font-size: 15px; }
+  .editor blockquote {
+    margin: 6px 0;
+    padding: 2px 12px;
+    border-left: 3px solid var(--accent-dim);
+    color: var(--text-dim);
+  }
+  .editor code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: rgba(255, 255, 255, 0.07);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .editor s { color: var(--text-faint); }
+  .editor hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+  .btn-row { display: flex; gap: 10px; margin-top: 18px; align-items: center; }
+
+  button.primary, button.secondary, button.ghost {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    font-weight: 600;
+    border-radius: 7px;
+    padding: 9px 16px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.12s;
+  }
+  button.primary { background: var(--accent); color: #06201c; }
+  button.primary:hover { background: #3fe0ca; }
+  button.secondary { background: transparent; border-color: var(--border); color: var(--text-dim); }
+  button.secondary:hover { border-color: var(--text-faint); color: var(--text); }
+  button.ghost { background: transparent; color: var(--text-faint); border: none; text-decoration: underline; text-underline-offset: 2px; padding: 9px 4px; }
+  button.ghost:hover { color: var(--text-dim); }
+
+  .status { font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+  .status.ok { color: var(--accent); }
+  .status.err { color: var(--red); }
+
+  .cmd-list { display: flex; flex-direction: column; gap: 8px; }
+  .cmd-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-soft);
+    border-radius: 7px;
+    padding: 10px 12px;
+  }
+  .cmd-row .cmd-main { flex: 1; min-width: 0; }
+  .cmd-trigger { font-family: var(--mono); font-size: 13.5px; color: var(--accent); font-weight: 600; }
+  .cmd-category {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--amber);
+    background: rgba(224, 164, 88, 0.12);
+    padding: 1px 7px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .cmd-preview {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cmd-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .cmd-actions button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 6px;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .cmd-actions button:hover { border-color: var(--text-faint); color: var(--text); }
+  .cmd-actions button.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .empty-state {
+    color: var(--text-faint);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+    border: 1px dashed var(--border);
+    border-radius: 7px;
+  }
+
+  .output-box {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .output-box .k { color: var(--accent); }
+  .output-box .s { color: #c9d6a8; }
+  .output-box .p { color: var(--text-faint); }
+
+  @media (max-width: 560px) {
+    .field-row { flex-direction: column; gap: 0; }
+    .wrap { padding: 24px 16px 60px; }
+    h1 { font-size: 23px; }
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Devvit Bot · Offline Tool</div>
+    <h1>Command Builder</h1>
+    <p>Build your bot's <code>bot_responses</code> JSON visually instead of hand-typing it. Write each response with the formatting toolbar, and this generates correctly-escaped JSON you can paste straight into your app settings.</p>
+  </header>
+
+  <div class="panel">
+    <details class="import-details">
+      <summary>Import existing JSON (optional — pick up where your current command list leaves off)</summary>
+      <div class="import-body">
+        <div class="field">
+          <textarea id="importInput" rows="5" placeholder='Paste your current "Bot Responses (JSON)" value here...'></textarea>
+        </div>
+        <button class="secondary" id="importBtn" type="button">Load into builder</button>
+        <div class="status" id="importStatus"></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">
+      <h2 id="formTitle">Add a command</h2>
+    </div>
+    <div class="panel-desc">Fill this out, then click Add — repeat for each command. Nothing is saved anywhere except in this page while it's open.</div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="triggerInput">Command</label>
+        <input type="text" id="triggerInput" placeholder="ammoniapoisoning" autocomplete="off">
+        <div class="hint">Will be saved as <strong id="triggerPreview">—</strong></div>
+      </div>
+      <div class="field">
+        <label for="categoryInput">Category <span style="font-weight:400;color:var(--text-faint);">(optional)</span></label>
+        <input type="text" id="categoryInput" placeholder="Diseases" autocomplete="off" list="categoryOptions">
+        <datalist id="categoryOptions"></datalist>
+        <div class="hint">Leave blank for no category</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Response</label>
+      <div class="toolbar">
+        <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+        <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+        <button type="button" data-cmd="code" title="Inline code">&lt;/&gt;</button>
+        <span style="width:1px;background:var(--border);margin:2px 4px;"></span>
+        <button type="button" data-block="H1" title="Heading 1">H1</button>
+        <button type="button" data-block="H2" title="Heading 2">H2</button>
+        <button type="button" data-block="H3" title="Heading 3">H3</button>
+        <button type="button" data-block="BLOCKQUOTE" title="Quote">"</button>
+        <span style="width:1px;background:var(--border);margin:2px 4px;"></span>
+        <button type="button" data-cmd="insertUnorderedList" title="Bullet list">•≡</button>
+        <button type="button" data-cmd="insertOrderedList" title="Numbered list">1≡</button>
+        <button type="button" data-cmd="link" title="Link">🔗</button>
+        <button type="button" data-cmd="hr" title="Horizontal rule">—</button>
+      </div>
+      <div class="editor" id="editor" contenteditable="true" data-placeholder="Write the response here..."></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="primary" id="saveBtn" type="button">Add command</button>
+      <button class="ghost" id="cancelEditBtn" type="button" style="display:none;">Cancel edit</button>
+    </div>
+    <div class="status" id="formStatus"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">
+      <h2>Your commands</h2>
+      <span class="count" id="cmdCount">0</span>
+    </div>
+    <div class="cmd-list" id="cmdList"></div>
+    <div class="empty-state" id="emptyState">No commands yet — add one above, or import your existing JSON.</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">
+      <h2>Output — paste into "Bot Responses (JSON)"</h2>
+    </div>
+    <div class="output-box" id="output">{}</div>
+    <div class="btn-row">
+      <button class="primary" id="copyBtn" type="button">Copy JSON</button>
+    </div>
+    <div class="status" id="copyStatus"></div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /** trigger -> { category: string|null, text: string } */
+  var commands = {};
+  var editingTrigger = null;
+
+  var editor = document.getElementById('editor');
+  var triggerInput = document.getElementById('triggerInput');
+  var triggerPreview = document.getElementById('triggerPreview');
+  var categoryInput = document.getElementById('categoryInput');
+  var categoryOptions = document.getElementById('categoryOptions');
+  var formTitle = document.getElementById('formTitle');
+  var saveBtn = document.getElementById('saveBtn');
+  var cancelEditBtn = document.getElementById('cancelEditBtn');
+  var formStatus = document.getElementById('formStatus');
+  var cmdList = document.getElementById('cmdList');
+  var cmdCount = document.getElementById('cmdCount');
+  var emptyState = document.getElementById('emptyState');
+  var output = document.getElementById('output');
+  var copyBtn = document.getElementById('copyBtn');
+  var copyStatus = document.getElementById('copyStatus');
+  var importInput = document.getElementById('importInput');
+  var importBtn = document.getElementById('importBtn');
+  var importStatus = document.getElementById('importStatus');
+
+  try { document.execCommand('defaultParagraphSeparator', false, 'div'); } catch (e) {}
+
+  // ---------------------------------------------------------------------
+  // Trigger name slugification (mirrors what the bot itself accepts:
+  // letters, digits, underscore, hyphen)
+  // ---------------------------------------------------------------------
+  function slugifyTrigger(raw) {
+    return raw
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9_-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  triggerInput.addEventListener('input', function () {
+    var slug = slugifyTrigger(triggerInput.value);
+    triggerPreview.textContent = slug ? '!' + slug : '—';
+  });
+
+  // ---------------------------------------------------------------------
+  // Toolbar: bold / italic / strikethrough / headings / blockquote / lists
+  // / link / inline code / horizontal rule. Scope is intentionally limited
+  // to what Reddit's markdown (and therefore the bot's responses) actually
+  // renders - not a general word processor.
+  // ---------------------------------------------------------------------
+  function wrapSelectionWithTag(tagName, placeholder) {
+    var sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    var range = sel.getRangeAt(0);
+    var el = document.createElement(tagName);
+    if (range.collapsed) {
+      el.textContent = placeholder;
+      range.insertNode(el);
+      range.setStartAfter(el);
+      range.setEndAfter(el);
+    } else {
+      el.appendChild(range.extractContents());
+      range.insertNode(el);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  document.querySelectorAll('.toolbar button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      editor.focus();
+      var cmd = btn.getAttribute('data-cmd');
+      var block = btn.getAttribute('data-block');
+
+      if (block) {
+        // Toggle off if the current block is already this type, otherwise
+        // apply it - mirrors how the bold/italic buttons toggle.
+        var current = (document.queryCommandValue('formatBlock') || '').toUpperCase();
+        document.execCommand('formatBlock', false, current === block ? 'DIV' : block);
+      } else if (cmd === 'link') {
+        var url = window.prompt('Link URL:', 'https://');
+        if (url) document.execCommand('createLink', false, url);
+      } else if (cmd === 'code') {
+        wrapSelectionWithTag('CODE', 'code');
+      } else if (cmd === 'hr') {
+        document.execCommand('insertHorizontalRule', false, null);
+      } else {
+        document.execCommand(cmd, false, null);
+      }
+      updateToolbarState();
+    });
+  });
+
+  function updateToolbarState() {
+    document.querySelectorAll('.toolbar button[data-cmd]').forEach(function (btn) {
+      var cmd = btn.getAttribute('data-cmd');
+      if (cmd === 'link' || cmd === 'code' || cmd === 'hr') return;
+      try {
+        btn.classList.toggle('active', document.queryCommandState(cmd));
+      } catch (e) {}
+    });
+    var currentBlock = (document.queryCommandValue('formatBlock') || '').toUpperCase();
+    document.querySelectorAll('.toolbar button[data-block]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-block') === currentBlock);
+    });
+  }
+  editor.addEventListener('keyup', updateToolbarState);
+  editor.addEventListener('mouseup', updateToolbarState);
+
+  // ---------------------------------------------------------------------
+  // contenteditable HTML -> markdown (only handles what the toolbar can
+  // produce: bold, italic, links, bullet/numbered lists, line breaks)
+  // ---------------------------------------------------------------------
+  function htmlToMarkdown(root) {
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+      var tag = node.tagName;
+      var innerOf = function (n) {
+        return Array.prototype.map.call(n.childNodes, walk).join('');
+      };
+
+      switch (tag) {
+        case 'B':
+        case 'STRONG':
+          return '**' + innerOf(node) + '**';
+        case 'I':
+        case 'EM':
+          return '*' + innerOf(node) + '*';
+        case 'S':
+        case 'STRIKE':
+        case 'DEL':
+          return '~~' + innerOf(node) + '~~';
+        case 'CODE':
+          return '`' + innerOf(node) + '`';
+        case 'A':
+          return '[' + (innerOf(node) || node.getAttribute('href')) + '](' + node.getAttribute('href') + ')';
+        case 'H1':
+          return '# ' + innerOf(node).trim() + '\n';
+        case 'H2':
+          return '## ' + innerOf(node).trim() + '\n';
+        case 'H3':
+          return '### ' + innerOf(node).trim() + '\n';
+        case 'BLOCKQUOTE':
+          return innerOf(node)
+            .split('\n')
+            .filter(function (l) { return l.length > 0; })
+            .map(function (l) { return '> ' + l; })
+            .join('\n') + '\n';
+        case 'HR':
+          return '---\n';
+        case 'UL':
+          return Array.prototype.map.call(node.children, function (li) {
+            return '- ' + innerOf(li).trim();
+          }).join('\n') + '\n';
+        case 'OL':
+          return Array.prototype.map.call(node.children, function (li, i) {
+            return (i + 1) + '. ' + innerOf(li).trim();
+          }).join('\n') + '\n';
+        case 'BR':
+          return '\n';
+        case 'DIV':
+        case 'P':
+          return innerOf(node) + '\n';
+        default:
+          return innerOf(node);
+      }
+    }
+
+    var raw = Array.prototype.map.call(root.childNodes, walk).join('');
+    return raw.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // ---------------------------------------------------------------------
+  // markdown -> contenteditable HTML (reverse of the above, for editing
+  // an already-added command). Only understands the subset the toolbar
+  // itself produces - anything fancier a mod hand-wrote elsewhere (e.g.
+  // headers, blockquotes) will just appear as plain literal text here,
+  // which is safe to re-save without losing it.
+  // ---------------------------------------------------------------------
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function inlineToHtml(text) {
+    var html = escapeHtml(text);
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    html = html.replace(/~~([^~]+)~~/g, '<s>$1</s>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    return html;
+  }
+
+  function markdownToHtml(markdown) {
+    var lines = markdown.split('\n');
+    var html = '';
+    var i = 0;
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      var heading = line.match(/^(#{1,3})\s+(.*)/);
+      if (heading) {
+        var level = heading[1].length;
+        html += '<h' + level + '>' + inlineToHtml(heading[2]) + '</h' + level + '>';
+        i++;
+        continue;
+      }
+
+      if (/^---+$/.test(line.trim())) {
+        html += '<hr>';
+        i++;
+        continue;
+      }
+
+      if (/^>\s?/.test(line)) {
+        var qlines = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) {
+          qlines.push('<div>' + inlineToHtml(lines[i].replace(/^>\s?/, '')) + '</div>');
+          i++;
+        }
+        html += '<blockquote>' + qlines.join('') + '</blockquote>';
+        continue;
+      }
+
+      if (/^- /.test(line)) {
+        var items = [];
+        while (i < lines.length && /^- /.test(lines[i])) {
+          items.push('<li>' + inlineToHtml(lines[i].slice(2)) + '</li>');
+          i++;
+        }
+        html += '<ul>' + items.join('') + '</ul>';
+        continue;
+      }
+
+      if (/^\d+\.\s/.test(line)) {
+        var oitems = [];
+        while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+          oitems.push('<li>' + inlineToHtml(lines[i].replace(/^\d+\.\s/, '')) + '</li>');
+          i++;
+        }
+        html += '<ol>' + oitems.join('') + '</ol>';
+        continue;
+      }
+
+      html += '<div>' + (line ? inlineToHtml(line) : '<br>') + '</div>';
+      i++;
+    }
+
+    return html || '<div><br></div>';
+  }
+
+  // ---------------------------------------------------------------------
+  // Form save / edit / cancel
+  // ---------------------------------------------------------------------
+  function resetForm() {
+    triggerInput.value = '';
+    categoryInput.value = '';
+    triggerPreview.textContent = '—';
+    editor.innerHTML = '';
+    editingTrigger = null;
+    formTitle.textContent = 'Add a command';
+    saveBtn.textContent = 'Add command';
+    cancelEditBtn.style.display = 'none';
+    formStatus.textContent = '';
+    formStatus.className = 'status';
+  }
+
+  saveBtn.addEventListener('click', function () {
+    var trigger = slugifyTrigger(triggerInput.value);
+    var category = categoryInput.value.trim();
+    var text = htmlToMarkdown(editor);
+
+    if (!trigger) {
+      formStatus.textContent = 'Command name is required.';
+      formStatus.className = 'status err';
+      triggerInput.focus();
+      return;
+    }
+    if (!text) {
+      formStatus.textContent = 'Response text is required.';
+      formStatus.className = 'status err';
+      editor.focus();
+      return;
+    }
+    if (trigger !== editingTrigger && commands[trigger]) {
+      formStatus.textContent = '"' + trigger + '" already exists — edit it from the list below instead, or pick a different name.';
+      formStatus.className = 'status err';
+      return;
+    }
+
+    if (editingTrigger && editingTrigger !== trigger) {
+      delete commands[editingTrigger];
+    }
+
+    commands[trigger] = { category: category || null, text: text };
+
+    formStatus.textContent = 'Saved "' + trigger + '".';
+    formStatus.className = 'status ok';
+
+    resetForm();
+    render();
+  });
+
+  cancelEditBtn.addEventListener('click', resetForm);
+
+  function loadIntoForm(trigger) {
+    var entry = commands[trigger];
+    if (!entry) return;
+
+    editingTrigger = trigger;
+    triggerInput.value = trigger;
+    triggerPreview.textContent = '!' + trigger;
+    categoryInput.value = entry.category || '';
+    editor.innerHTML = markdownToHtml(entry.text);
+
+    formTitle.textContent = 'Editing "' + trigger + '"';
+    saveBtn.textContent = 'Update command';
+    cancelEditBtn.style.display = 'inline-block';
+    formStatus.textContent = '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function deleteCommand(trigger) {
+    if (!window.confirm('Remove "' + trigger + '"?')) return;
+    delete commands[trigger];
+    if (editingTrigger === trigger) resetForm();
+    render();
+  }
+
+  // ---------------------------------------------------------------------
+  // Import existing JSON
+  // ---------------------------------------------------------------------
+  importBtn.addEventListener('click', function () {
+    var raw = importInput.value.trim();
+    if (!raw) {
+      importStatus.textContent = 'Paste your existing JSON first.';
+      importStatus.className = 'status err';
+      return;
+    }
+
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      importStatus.textContent = 'That\u2019s not valid JSON: ' + e.message;
+      importStatus.className = 'status err';
+      return;
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      importStatus.textContent = 'Expected a JSON object with trigger names as keys.';
+      importStatus.className = 'status err';
+      return;
+    }
+
+    var count = 0;
+    Object.keys(parsed).forEach(function (trigger) {
+      var entry = parsed[trigger];
+      if (typeof entry === 'string') {
+        commands[trigger] = { category: null, text: entry };
+        count++;
+      } else if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
+        commands[trigger] = { category: entry.category || null, text: entry.text };
+        count++;
+      }
+    });
+
+    importStatus.textContent = 'Loaded ' + count + ' command(s).';
+    importStatus.className = 'status ok';
+    importInput.value = '';
+    render();
+  });
+
+  // ---------------------------------------------------------------------
+  // Rendering: command list, category autocomplete, JSON output
+  // ---------------------------------------------------------------------
+  function render() {
+    var triggers = Object.keys(commands).sort();
+
+    cmdCount.textContent = triggers.length;
+    emptyState.style.display = triggers.length ? 'none' : 'block';
+    cmdList.innerHTML = '';
+
+    var categoriesSeen = {};
+
+    triggers.forEach(function (trigger) {
+      var entry = commands[trigger];
+      if (entry.category) categoriesSeen[entry.category] = true;
+
+      var row = document.createElement('div');
+      row.className = 'cmd-row';
+
+      var main = document.createElement('div');
+      main.className = 'cmd-main';
+      main.innerHTML =
+        '<span class="cmd-trigger">!' + escapeHtml(trigger) + '</span>' +
+        (entry.category ? '<span class="cmd-category">' + escapeHtml(entry.category) + '</span>' : '') +
+        '<div class="cmd-preview">' + escapeHtml(entry.text.replace(/\n/g, ' ')) + '</div>';
+
+      var actions = document.createElement('div');
+      actions.className = 'cmd-actions';
+
+      var editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.title = 'Edit';
+      editBtn.textContent = '✎';
+      editBtn.addEventListener('click', function () { loadIntoForm(trigger); });
+
+      var delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.title = 'Delete';
+      delBtn.className = 'danger';
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', function () { deleteCommand(trigger); });
+
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      row.appendChild(main);
+      row.appendChild(actions);
+      cmdList.appendChild(row);
+    });
+
+    categoryOptions.innerHTML = Object.keys(categoriesSeen).sort().map(function (c) {
+      return '<option value="' + escapeHtml(c) + '">';
+    }).join('');
+
+    renderOutput(triggers);
+  }
+
+  function renderOutput(triggers) {
+    var result = {};
+    triggers.forEach(function (trigger) {
+      var entry = commands[trigger];
+      result[trigger] = entry.category
+        ? { category: entry.category, text: entry.text }
+        : entry.text;
+    });
+
+    var json = JSON.stringify(result, null, 2);
+    output.textContent = json;
+  }
+
+  copyBtn.addEventListener('click', function () {
+    var text = output.textContent;
+    var done = function (ok) {
+      copyStatus.textContent = ok ? 'Copied to clipboard.' : 'Couldn\u2019t copy automatically — select the text above and copy manually.';
+      copyStatus.className = 'status ' + (ok ? 'ok' : 'err');
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done(true);
+      } catch (e) {
+        done(false);
+      }
+    }
+  });
+
+  render();
+})();
+</script>
+
+</body>
+</html>
