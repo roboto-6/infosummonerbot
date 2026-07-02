@@ -34,6 +34,7 @@ https://developers.reddit.com/r/YourSubredditName/apps/infosummonerbot
 **Bot Responses (JSON)**
 - Define your trigger-response pairs in JSON format
 - Supports full markdown formatting including headers, links, lists, bold, italic, quotes, and more
+[Use our bot command generator tool](https://roboto-6.github.io/infosummonerbot/command-builder.html)
 
 Example:
 ```json
@@ -128,11 +129,6 @@ Each subreddit will have its own:
 
 ## Troubleshooting
 
-**Bot not responding:**
-- Check if responses are configured in settings
-- Verify the correct summon indicator is being used
-- Check logs: `devvit logs infosummonerbot`
-
 **Can't access settings:**
 - Must be a moderator with full permissions
 - Use the exact URL format with your subreddit name
@@ -142,23 +138,18 @@ Each subreddit will have its own:
 - This is intentional to prevent spam
 - Can be disabled in settings
 
-## Development
-
-To view logs:
-```bash
-devvit logs infosummonerbot
-```
-
-To update the app:
-```bash
-devvit upload
-```
 
 ## Support
 
-For issues or questions, visit r/Devvit or check the documentation at developers.reddit.com
+For issues or questions, visit r/infosummonerbot or check the documentation at https://github.com/roboto-6/infosummonerbot
 
 # Change History
+
+## 0.3.0
+- Fixed the dictionary display feature
+- Added the ability to categorize commands
+- Added default !command-list command as well as the ability to use ![category] to view the list of commands within a category
+- Created a JSON converter to make command generation easier
 
 ## 0.2.10
 - Fixed bug that created rate limit error when initializing the dictionary
