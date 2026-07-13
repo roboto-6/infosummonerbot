@@ -4,40 +4,18 @@ import { Devvit, SettingScope } from '@devvit/public-api';
  * ============================================================================
  * INFO SUMMONER BOT
  * ============================================================================
- * Lets moderators define "trigger" commands (e.g. "!caresheet") with canned
- * text responses. Any user can summon a response by commenting the trigger
- * word on a post. A public "Command Dictionary" post lists every available
- * command for reference.
+ * Mods define "trigger" commands (e.g. "!caresheet") with canned text
+ * responses. Any user can summon a response by commenting the trigger word.
+ * A public "Command Dictionary" post lists every command for reference.
  *
  * Data model:
- *  - Commands + response text live in App Settings as one JSON blob
- *    (setting name: "bot_responses"). Format: { "trigger": "response text" }
- *  - Redis holds only small runtime bookkeeping: per-post cooldowns, ping
- *    counts, and the dictionary post's ID + its per-command comment IDs.
+ *  - Commands + responses: one JSON blob in settings ("bot_responses")
+ *  - Redis: just runtime bookkeeping - cooldowns, ping counts, dictionary
+ *    post ID + its per-command comment IDs
  *
- * ENVIRONMENT NOTE:
- * This project pins "@devvit/public-api" to 0.13.6 in package.json.
- * @devvit/public-api@0.13.6 removed the interactive Blocks custom-post
- * system entirely (addCustomPostType stopped working, and the hooks -
- * useAsync, useState, etc. - it depended on were removed outright). Do NOT
- * bump @devvit/public-api past 0.13.6 without testing.
- *
- * The dictionary post itself was deliberately kept as a plain text post
- * (not a custom post type) specifically to avoid that broken system - see
- * the "Update Command Dictionary" menu item below. A brief attempt was made
- * to migrate to Devvit Web (a separate, newer post/server architecture)
- * instead, but mixing Devvit Web's "post"/"server" config with this file's
- * "blocks" config in the same devvit.json broke post rendering entirely
- * (confirmed via testing, not just suspected) - so that path was abandoned
- * in favor of this simpler, fully-working plain-text-post approach.
- *
- * Longer term, Blocks itself is being phased out platform-wide in favor of
- * Devvit Web, and a full migration of this entire file (settings, menu
- * items, the comment trigger) off Blocks will likely be necessary
- * eventually. That's a deliberately deferred, separate future project, not
- * something to bundle into small fixes - addSettings/addMenuItem/addTrigger
- * (used throughout this file) are still working and officially supported
- * for now.
+ * Blocks itself is being phased out platform-wide (Devvit Web is the
+ * replacement). Full migration off Blocks is a deferred future project -
+ * addSettings/addMenuItem/addTrigger still work fine for now.
  * ============================================================================
  */
 
@@ -53,12 +31,9 @@ Devvit.configure({
 // ============================================================================
 Devvit.addSettings([
   {
-    // Purely informational - this field isn't read anywhere in the bot's
-    // code. It exists only to give the command builder link its own
-    // clearly separated, easy-to-copy spot on the settings page, since
-    // Devvit's helpText doesn't render line breaks or clickable links well
-    // enough to bury a URL inside a longer paragraph. Safe if a mod edits
-    // or clears it - nothing depends on this value.
+    // Informational only, not read by any code.
+    // Gives the builder link its own copyable spot, since helpText doesn't
+    // render line breaks/links well enough to bury a URL mid-paragraph.
     type: 'string',
     name: 'command_builder_link',
     label: 'Command Builder Tool',
@@ -67,20 +42,43 @@ Devvit.addSettings([
     scope: SettingScope.Installation,
   },
   {
-    // The master list of commands. Each entry can be either:
-    //  - A plain string response (no category - shows as "Uncategorized")
-    //  - An object { "category": "...", "text": "..." } for a categorized
-    //    response, used to group commands in the dictionary post
-    // Both forms can be mixed freely in the same JSON blob, so existing
-    // plain-string commands never need to be touched to add categories to
-    // new (or individually-migrated) ones.
+    // Used when the dictionary post is (re)created. Reddit won't let a
+    // post's title be edited after posting - changing this just triggers a
+    // new post next time "Update Command Dictionary" runs.
+    type: 'string',
+    name: 'dictionary_post_title',
+    label: 'Dictionary Post Title',
+    helpText:
+      'Title for the dictionary post. Note: Reddit doesn\'t allow editing a post\'s title after posting - changing this triggers the bot to automatically create a new dictionary post (replacing the old one) the next time "Update Command Dictionary" is run.',
+    defaultValue: '📖 Bot Command Dictionary',
+    scope: SettingScope.Installation,
+    onValidate: ({ value }) => {
+      if (!value || !value.trim()) {
+        return 'Title cannot be empty';
+      }
+    },
+  },
+  {
+    // Optional blurb above the category list - house rules, a wiki link,
+    // whatever. Blank by default. Updates immediately on every run (unlike
+    // the title).
+    type: 'paragraph',
+    name: 'dictionary_post_intro',
+    label: 'Dictionary Post Intro Text (optional)',
+    helpText: 'Optional text shown at the top of the Command Dictionary post, above the category list. Supports markdown. Leave blank for no intro text.',
+    scope: SettingScope.Installation,
+  },
+  {
+    // The command list. Each entry is either:
+    //  - a plain string (uncategorized)
+    //  - { category, text } (grouped in the dictionary post)
+    // Both forms mix freely - existing plain entries never need touching.
     type: 'paragraph',
     name: 'bot_responses',
     label: 'Bot Responses (JSON)',
     helpText: 'Configure bot responses in JSON format. Plain response: {"caresheet": "Here is the care guide..."}. Categorized response (for grouping in the dictionary post): {"ich": {"category": "Diseases", "text": "..."}}. Both forms can be mixed in the same list.\n\nResponse text supports full markdown including links, bold, italic, lists, etc.',
     scope: SettingScope.Installation,
-    // Validates JSON as it's saved, so bad input is caught immediately
-    // rather than silently producing zero commands later at runtime.
+    // Catches bad JSON/malformed entries at save time, not runtime.
     onValidate: ({ value }) => {
       if (!value) return; // Empty is okay
 
@@ -95,8 +93,6 @@ Devvit.addSettings([
         return 'Must be a JSON object with trigger names as keys';
       }
 
-      // Each entry must be a string, or a {category?, text} object with a
-      // string "text" field - catch typos/malformed entries at save time.
       for (const [trigger, entry] of Object.entries(parsed)) {
         const isPlainString = typeof entry === 'string';
         const isCategorizedObject =
@@ -112,7 +108,7 @@ Devvit.addSettings([
     },
   },
   {
-    // The character that precedes a command, e.g. "!" in "!caresheet".
+    // e.g. "!" in "!caresheet"
     type: 'string',
     name: 'summon_indicator',
     label: 'Summon Indicator',
@@ -129,8 +125,7 @@ Devvit.addSettings([
     },
   },
   {
-    // If on, a given trigger can only fire once per post - stops the same
-    // response from being spammed repeatedly on one thread.
+    // Once per post per trigger, if on - stops spam on one thread.
     type: 'boolean',
     name: 'enable_cooldown',
     label: 'Enable Trigger Cooldown',
@@ -139,8 +134,7 @@ Devvit.addSettings([
     scope: SettingScope.Installation,
   },
   {
-    // Caps how many times any single user can be pinged by the bot within
-    // one post, across all triggers combined.
+    // Caps pings to one user per post, across all triggers.
     type: 'number',
     name: 'max_pings_per_user',
     label: 'Max Pings Per User Per Post',
@@ -156,18 +150,18 @@ Devvit.addSettings([
 ]);
 
 /**
- * A single entry in "bot_responses": either a plain response string
- * (uncategorized), or an object with the response text plus an optional
- * category used to group commands in the dictionary post.
+ * One entry in "bot_responses": a plain response string (uncategorized), or
+ * { category?, text } for a categorized one.
  */
 type ResponseEntry = string | { category?: string; text: string };
 
 /**
- * Reads and parses the raw "bot_responses" setting, before flattening.
- * Returns {} (never throws/nulls) if the setting is empty or malformed.
- * Both getResponses() and getCategories() below derive from this single
- * parse, so the two stay perfectly in sync automatically - there's no
- * separate settings field to keep matched up by hand.
+ * Parses raw "bot_responses". Returns {} if empty/malformed. getResponses()
+ * and getCategories() both derive from this, so they stay in sync.
+ *
+ * Trigger keys keep whatever casing was typed ("ACF" stays "ACF" for
+ * display) - matching against a comment is case-insensitive separately, via
+ * findTriggerKey() below.
  */
 async function getRawResponses(context: any): Promise<Record<string, ResponseEntry>> {
   const settings = await context.settings.get('bot_responses');
@@ -181,11 +175,15 @@ async function getRawResponses(context: any): Promise<Record<string, ResponseEnt
 }
 
 /**
- * Flattens "bot_responses" down to trigger -> response text, regardless of
- * whether each entry was written as a plain string or a categorized object.
- * This is what the comment-matching logic and "View Bot Responses" menu
- * item use - they don't care about categories, just trigger -> text.
+ * Case-insensitive key lookup - finds the actual (original-casing) trigger
+ * key matching `lookupTrigger`, or undefined.
  */
+function findTriggerKey(responses: Record<string, unknown>, lookupTrigger: string): string | undefined {
+  const lower = lookupTrigger.toLowerCase();
+  return Object.keys(responses).find((key) => key.toLowerCase() === lower);
+}
+
+/** Flattens "bot_responses" to trigger -> response text, categorized or not. */
 async function getResponses(context: any): Promise<Record<string, string>> {
   const raw = await getRawResponses(context);
   const flat: Record<string, string> = {};
@@ -198,10 +196,8 @@ async function getResponses(context: any): Promise<Record<string, string>> {
 }
 
 /**
- * Extracts trigger -> category from "bot_responses", for entries that
- * specified one. Triggers written as plain strings (or as an object with no
- * "category" field) simply won't appear here - the dictionary post treats
- * any trigger missing from this map as "Uncategorized".
+ * Trigger -> category, for entries that have one. Anything missing here is
+ * "Uncategorized" in the dictionary post.
  */
 async function getCategories(context: any): Promise<Record<string, string>> {
   const raw = await getRawResponses(context);
@@ -220,39 +216,7 @@ async function getCategories(context: any): Promise<Record<string, string>> {
 // MODERATOR MENU ACTIONS
 // ============================================================================
 
-/**
- * Quick way for a mod to see the current command list without digging
- * through the settings page. Shows a toast + logs full detail to the
- * console (visible via `devvit logs`).
- */
-Devvit.addMenuItem({
-  label: 'View Bot Responses',
-  location: 'subreddit',
-  forUserType: 'moderator',
-  onPress: async (_event, context) => {
-    const { ui } = context;
-    const responses = await getResponses(context);
-    const triggers = Object.keys(responses);
-
-    if (triggers.length === 0) {
-      ui.showToast('No responses configured yet. Go to App Settings to add some!');
-      return;
-    }
-
-    const list = triggers.map(t => `!${t}`).join(', ');
-    ui.showToast(`${triggers.length} Response(s): ${list}\n\nGo to App Settings to edit.`);
-    console.log('=== ALL BOT RESPONSES ===');
-    triggers.forEach(trigger => {
-      console.log(`!${trigger}: ${responses[trigger]}`);
-    });
-    console.log('=========================');
-  },
-});
-
-/**
- * Convenience shortcut that logs a direct link to this app's settings page
- * for the current subreddit, so mods don't have to hunt for it manually.
- */
+/** Jumps a mod straight to this app's settings page for the subreddit. */
 Devvit.addMenuItem({
   label: 'Manage Bot Responses',
   location: 'subreddit',
@@ -262,33 +226,28 @@ Devvit.addMenuItem({
     const subreddit = await context.reddit.getCurrentSubreddit();
     const settingsUrl = `https://developers.reddit.com/r/${subreddit.name}/apps/infosummonerbot`;
 
-    ui.showToast(`Opening settings page for ${subreddit.name}...`);
-
-    // Log the URL for easy access
-    console.log(`Settings page: ${settingsUrl}`);
+    ui.navigateTo(settingsUrl);
   },
 });
 
 /**
- * Builds (or rebuilds) the public "Command Dictionary" post + its supporting
- * comments. Run this any time commands are added/changed in settings, to
- * refresh what's shown in the dictionary post.
+ * Builds/updates the public "Command Dictionary" post + its comments. Run
+ * after adding/editing commands in settings.
  *
- * This is a plain text post, not a custom/interactive post type - its body
- * is a categorized, linked index of every command (reusing the same link
- * format as the "!command-list" auto-generated command below), and each
- * command's full response text lives in its own comment beneath the post.
- * A plain text post has no fixed-height canvas or scrolling limitation,
- * unlike a Blocks custom post - it just scrolls like any normal post.
+ * Plain text post, not a custom post type - no fixed height, no scroll
+ * limit. Body is a categorized, linked index; each command's full text
+ * lives in its own comment.
  *
  * Flow:
- *  1. Reuse the existing dictionary post if we have one saved in Redis and
- *     it still exists / hasn't been removed. Otherwise create a new one.
- *  2. Delete old per-command comments, then post fresh ones holding each
- *     command's full response text.
- *  3. Edit the post body itself to a categorized list of links to those
- *     comments.
- *  4. Lock the post so only the bot's comments live there.
+ *  - Reuse the existing post if the title still matches what's configured.
+ *    A title change is the one thing that forces a new post - Reddit won't
+ *    let you edit a post's title after the fact.
+ *  - Diff comments against the current command list: edit in place, add
+ *    only for new commands, delete only for removed ones. (Not a full
+ *    delete-and-repost every time - that used to make even a one-command
+ *    edit slow enough to risk timing out.)
+ *  - Edit the post body to the categorized link list.
+ *  - Lock the post.
  */
 Devvit.addMenuItem({
   label: 'Update Command Dictionary',
@@ -303,15 +262,23 @@ Devvit.addMenuItem({
       const categories = await getCategories(context);
       const triggers = Object.keys(responses).sort();
 
+      // Falls back to the default for installs from before this setting
+      // existed, where the stored value may still be unset.
+      const postTitle = (await context.settings.get('dictionary_post_title')) || '📖 Bot Command Dictionary';
+      const introText = (await context.settings.get('dictionary_post_intro')) || '';
+
       if (triggers.length === 0) {
         ui.showToast('No responses configured. Add some in settings first.');
         return;
       }
 
-      // Check if we already have a dictionary post from a previous run
-      let existingPostId = await redis.get('dictionary_post_id');
+      // Title change -> new post is the only forced-regen case; everything
+      // else (add/edit/remove commands) reuses the post and diffs comments.
+      const existingPostId = await redis.get('dictionary_post_id');
+      const storedTitle = await redis.get('dictionary_post_title_used');
       let dictionaryPost;
       let needsNewPost = false;
+      let oldCommentIds: Record<string, string> = {};
 
       if (existingPostId) {
         try {
@@ -320,27 +287,18 @@ Devvit.addMenuItem({
           if (dictionaryPost.removed) {
             console.log('Dictionary post was removed, creating new one');
             needsNewPost = true;
+          } else if (storedTitle !== null && storedTitle !== postTitle) {
+            console.log(`Dictionary title changed ("${storedTitle}" -> "${postTitle}"), recreating post`);
+            try {
+              await dictionaryPost.delete();
+            } catch (e) {
+              console.log(`Could not delete old dictionary post: ${e}`);
+            }
+            needsNewPost = true;
           } else {
+            // Same post, same title - reuse and diff comments below.
             await dictionaryPost.unlock();
-
-            // Delete old per-command comments (with delays to avoid rate
-            // limiting) before posting fresh ones.
-            const oldCommentIds = await redis.hGetAll('comment_ids');
-            const oldIds = Object.values(oldCommentIds);
-            for (let i = 0; i < oldIds.length; i++) {
-              try {
-                if (i > 0) {
-                  await new Promise((resolve) => setTimeout(resolve, 2000));
-                }
-                const comment = await reddit.getCommentById(oldIds[i]);
-                await comment.delete();
-              } catch (e) {
-                console.log(`Could not delete comment ${oldIds[i]}: ${e}`);
-              }
-            }
-            if (oldIds.length > 0) {
-              await new Promise((resolve) => setTimeout(resolve, 3000));
-            }
+            oldCommentIds = (await redis.hGetAll('comment_ids')) || {};
           }
         } catch (e) {
           console.log(`Dictionary post not found: ${e}`);
@@ -352,26 +310,75 @@ Devvit.addMenuItem({
 
       if (needsNewPost) {
         dictionaryPost = await reddit.submitPost({
-          title: '📖 Bot Command Dictionary',
+          title: postTitle,
           subredditName: subreddit.name,
           text: 'Generating dictionary...',
         });
 
         await redis.set('dictionary_post_id', dictionaryPost.id);
+        await redis.set('dictionary_post_title_used', postTitle);
         await redis.del('comment_ids');
+        oldCommentIds = {}; // Fresh post - nothing to diff against.
       }
 
       if (!dictionaryPost) {
         throw new Error('Dictionary post is unexpectedly missing after create/reuse step');
       }
 
-      // Post one comment per command holding its full response text.
-      const newCommentIds: Record<string, string> = {};
+      // Trigger no longer in settings -> delete its comment.
+      const removedTriggers = Object.keys(oldCommentIds).filter((t) => !(t in responses));
+      for (let i = 0; i < removedTriggers.length; i++) {
+        try {
+          if (i > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          const comment = await reddit.getCommentById(oldCommentIds[removedTriggers[i]]);
+          await comment.delete();
+        } catch (e) {
+          console.log(`Could not delete comment for removed trigger "${removedTriggers[i]}": ${e}`);
+        }
+      }
 
-      for (let i = 0; i < triggers.length; i++) {
-        const trigger = triggers[i];
-        const response = responses[trigger];
-        const commentText = `## ${trigger}\n\n${response}`;
+      // Editing your own comment isn't rate-limited the way rapid-fire
+      // new comments are - so edits run in parallel, no delay. This is
+      // what matters most, since most commands already have a comment and
+      // are just being edited. Only genuinely new ones hit the slower,
+      // cautious sequential path below.
+      const newCommentIds: Record<string, string> = {};
+      const newTriggers: string[] = [];
+      const editableTriggers = triggers.filter((trigger) => oldCommentIds[trigger]);
+
+      const editResults = await Promise.allSettled(
+        editableTriggers.map(async (trigger) => {
+          const commentText = `## ${trigger}\n\n${responses[trigger]}`;
+          const existingCommentId = oldCommentIds[trigger];
+          const comment = await reddit.getCommentById(existingCommentId);
+          await comment.edit({ text: commentText });
+          return { trigger, commentId: existingCommentId };
+        })
+      );
+
+      for (let i = 0; i < editResults.length; i++) {
+        const result = editResults[i];
+        const trigger = editableTriggers[i];
+
+        if (result.status === 'fulfilled') {
+          newCommentIds[result.value.trigger] = result.value.commentId;
+        } else {
+          // Old comment may have been deleted outside the bot - post fresh.
+          console.log(`Could not edit comment for "${trigger}", will post a new one: ${result.reason}`);
+          newTriggers.push(trigger);
+        }
+      }
+
+      // New commands + edit failures needing a fresh comment: sequential
+      // with a real delay, since rapid new-comment creation is more likely
+      // to get rate-limited.
+      newTriggers.push(...triggers.filter((t) => !oldCommentIds[t]));
+
+      for (let i = 0; i < newTriggers.length; i++) {
+        const trigger = newTriggers[i];
+        const commentText = `## ${trigger}\n\n${responses[trigger]}`;
 
         if (i > 0) {
           await new Promise((resolve) => setTimeout(resolve, 6000));
@@ -381,15 +388,18 @@ Devvit.addMenuItem({
         newCommentIds[trigger] = comment.id;
       }
 
+      // Full replace, not merge, so removed triggers don't linger.
+      await redis.del('comment_ids');
       await redis.hSet('comment_ids', newCommentIds);
 
-      // Edit the post body to a categorized, linked index of all commands.
+      // Rebuild the post body with the fresh comment links.
       const body = buildDictionaryPostBody(
         responses,
         categories,
         newCommentIds,
         subreddit.name,
-        dictionaryPost.id
+        dictionaryPost.id,
+        introText
       );
       await dictionaryPost.edit({ text: body });
 
@@ -404,17 +414,18 @@ Devvit.addMenuItem({
 });
 
 /**
- * Builds the categorized markdown body for the dictionary post itself: one
- * "## Category" heading per category, each followed by a bulleted, linked
- * list of its commands (reusing buildCommandListMarkdown, defined below).
- * Categories are sorted alphabetically, with "Uncategorized" always last.
+ * Builds the dictionary post body: intro text (if set), "Available
+ * commands:" heading, Uncategorized as a plain heading-less list, then
+ * each real category (alphabetical, bolded name) with its own list.
+ * Commands within every list are sorted alphabetically.
  */
 function buildDictionaryPostBody(
   responses: Record<string, string>,
   categories: Record<string, string>,
   commentIds: Record<string, string>,
   subredditName: string,
-  dictionaryPostId: string
+  dictionaryPostId: string,
+  introText: string = ''
 ): string {
   const UNCATEGORIZED = 'Uncategorized';
   const grouped: Record<string, string[]> = {};
@@ -425,18 +436,34 @@ function buildDictionaryPostBody(
     grouped[category].push(trigger);
   }
 
-  const categoryNames = Object.keys(grouped).sort((a, b) => {
-    if (a === UNCATEGORIZED) return 1;
-    if (b === UNCATEGORIZED) return -1;
-    return a.localeCompare(b);
-  });
+  for (const category of Object.keys(grouped)) {
+    grouped[category].sort((a, b) => a.localeCompare(b));
+  }
 
-  const sections = categoryNames.map((category) => {
+  const parts: string[] = [];
+
+  const trimmedIntro = introText.trim();
+  if (trimmedIntro) {
+    parts.push(trimmedIntro);
+  }
+
+  parts.push('# Available commands:');
+
+  // No heading for Uncategorized - just the list.
+  if (grouped[UNCATEGORIZED]) {
+    parts.push(buildCommandListMarkdown(grouped[UNCATEGORIZED], commentIds, subredditName, dictionaryPostId));
+  }
+
+  const realCategoryNames = Object.keys(grouped)
+    .filter((category) => category !== UNCATEGORIZED)
+    .sort((a, b) => a.localeCompare(b));
+
+  for (const category of realCategoryNames) {
     const list = buildCommandListMarkdown(grouped[category], commentIds, subredditName, dictionaryPostId);
-    return `## ${category}\n\n${list}`;
-  });
+    parts.push(`**${category}**\n\n${list}`);
+  }
 
-  return sections.join('\n\n');
+  return parts.join('\n\n');
 }
 
 
@@ -444,23 +471,15 @@ function buildDictionaryPostBody(
 // AUTO-GENERATED "LIST" COMMANDS
 // ============================================================================
 /**
- * Two trigger names work automatically, without ever being added to
- * "bot_responses":
- *  - "command-list": replies with a bulleted, linked list of every command
- *  - the slug of each category in use (e.g. "diseases" for a "Diseases"
- *    category): replies with the same style of list, scoped to just that
- *    category
- * These are pure fallbacks - if a mod ever configures an actual command in
- * "bot_responses" using one of these exact names, that real command is used
- * instead and the auto-generated one for that name is skipped entirely.
+ * Two trigger names work with no "bot_responses" entry needed:
+ *  - "command-list": bulleted, linked list of every command
+ *  - a category's slug (e.g. "diseases" for "Diseases"): same, scoped to
+ *    that category
+ * Pure fallbacks - a real configured command with the same name wins.
  */
 const COMMAND_LIST_TRIGGER = 'command-list';
 
-/**
- * Turns a category name into a safe, lowercase, hyphenated trigger word,
- * e.g. "Tank Setup" -> "tank-setup". Used to derive each category's
- * auto-generated list-command name from its display name in settings.
- */
+/** "Tank Setup" -> "tank-setup" */
 function slugifyCategory(category: string): string {
   return category
     .toLowerCase()
@@ -470,10 +489,8 @@ function slugifyCategory(category: string): string {
 }
 
 /**
- * Builds a plain markdown bulleted list linking each given trigger to its
- * full-text comment in the dictionary post - just "- [!trigger](url)" per
- * line, sorted alphabetically, no extra detail. Triggers that don't have a
- * posted comment yet are silently skipped rather than showing a dead link.
+ * Plain "- [!trigger](url)" list, alphabetical, linking each trigger to its
+ * comment. Skips triggers with no comment posted yet rather than dead-link.
  */
 function buildCommandListMarkdown(
   triggers: string[],
@@ -486,7 +503,7 @@ function buildCommandListMarkdown(
 
   for (const trigger of [...triggers].sort()) {
     const commentId = commentIds[trigger];
-    if (!commentId) continue; // no comment posted for this one yet - skip it
+    if (!commentId) continue;
     const cleanCommentId = commentId.replace(/^t1_/, '');
     const url = `https://www.reddit.com/r/${subredditName}/comments/${cleanPostId}/comment/${cleanCommentId}/`;
     lines.push(`- [!${trigger}](${url})`);
@@ -496,10 +513,9 @@ function buildCommandListMarkdown(
 }
 
 /**
- * Fetches everything needed (dictionary post ID, comment ID map, subreddit
- * name) and builds the reply text for a "list" command covering the given
- * set of triggers. Returns a friendly message instead of an empty list if
- * the dictionary post hasn't been generated yet.
+ * Builds the reply text for a "list" command over the given triggers.
+ * Falls back to a "not generated yet" message if there's no dictionary
+ * post/comments to link to.
  */
 async function buildReservedListResponse(context: any, triggersToList: string[]): Promise<string> {
   const { redis, reddit } = context;
@@ -524,10 +540,8 @@ async function buildReservedListResponse(context: any, triggersToList: string[])
 // COMMENT LISTENER - the core "summoning" behavior
 // ============================================================================
 /**
- * Fires on every new comment for this install. Scans the comment for one or
- * more trigger words and replies with the matching configured response,
- * optionally pinging the OP or whoever the commenter replied to.
- * (Unchanged from the working version - no bug found here.)
+ * Fires on every new comment. Scans for trigger words and replies with the
+ * matching response, optionally pinging the OP or parent commenter.
  */
 Devvit.addTrigger({
   event: 'CommentCreate',
@@ -547,11 +561,8 @@ Devvit.addTrigger({
     const cooldownEnabled = (await settings.get('enable_cooldown')) ?? true;
     const maxPingsPerUser = (await settings.get('max_pings_per_user')) || 0;
 
-    // Find every word that starts with the summon indicator (e.g. "!caresheet")
-    // and extract just the command part after the indicator. Hyphens are
-    // allowed (not just letters/digits/underscore) so multi-word trigger
-    // names like "!command-list" or a category slug like "!tank-setup"
-    // match in full instead of getting cut off at the hyphen.
+    // Extract trigger words after the indicator. Hyphens allowed too, so
+    // "!command-list" / "!tank-setup" match in full.
     const words = commentBody.split(/\s+/);
     const triggers: string[] = [];
 
@@ -566,18 +577,15 @@ Devvit.addTrigger({
 
     if (triggers.length === 0) return;
 
-    // Ping targeting: @op pings the post author, @above pings whoever this
-    // comment is replying to. Neither present -> defaults to pinging OP.
+    // @op pings the post author, @above pings the parent commenter.
+    // Neither present -> defaults to OP.
     const pingOP = commentBody.includes('@op');
     const pingAbove = commentBody.includes('@above');
 
-    // Get all responses from settings
     const allResponses = await getResponses(context);
 
-    // Group triggers by category, so an auto-generated "!<category-slug>"
-    // command (see AUTO-GENERATED "LIST" COMMANDS above) knows which
-    // triggers belong to it. Built fresh per comment since categories can
-    // change at any time in settings.
+    // Category slug -> triggers, for the auto-generated "!<category>" list
+    // commands. Rebuilt per comment since categories can change any time.
     const categories = await getCategories(context);
     const categorySlugToTriggers: Record<string, string[]> = {};
     for (const [cmdTrigger, category] of Object.entries(categories)) {
@@ -591,12 +599,11 @@ Devvit.addTrigger({
       return;
     }
 
-    // Process each trigger found in the comment
     for (const trigger of triggers) {
-      // A manually-configured command always wins if one exists under this
-      // exact name. Otherwise, fall back to the auto-generated list
-      // commands: the full command list, then a category-scoped list.
-      let response: string | undefined = allResponses[trigger];
+      // Real configured command wins if one matches (case-insensitive).
+      // Otherwise fall back to the auto-generated list commands.
+      const matchedKey = findTriggerKey(allResponses, trigger);
+      let response: string | undefined = matchedKey ? allResponses[matchedKey] : undefined;
 
       if (!response && trigger === COMMAND_LIST_TRIGGER) {
         response = await buildReservedListResponse(context, Object.keys(allResponses));
@@ -669,7 +676,6 @@ Devvit.addTrigger({
         // Build the response with ping
         const replyText = `${response}\n\n---\n\n${pingText}`;
 
-        // Reply to the comment
         await comment.reply({
           text: replyText,
         });

@@ -457,14 +457,15 @@
 
   // ---------------------------------------------------------------------
   // Trigger name slugification (mirrors what the bot itself accepts:
-  // letters, digits, underscore, hyphen)
+  // letters, digits, underscore, hyphen). Casing is preserved - the bot
+  // matches triggers case-insensitively but displays/stores whatever
+  // casing was configured.
   // ---------------------------------------------------------------------
   function slugifyTrigger(raw) {
     return raw
-      .toLowerCase()
       .trim()
       .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9_-]/g, '')
+      .replace(/[^a-zA-Z0-9_-]/g, '')
       .replace(/-+/g, '-')
       .replace(/^-+|-+$/g, '');
   }
@@ -718,8 +719,17 @@
       editor.focus();
       return;
     }
-    if (trigger !== editingTrigger && commands[trigger]) {
-      formStatus.textContent = '"' + trigger + '" already exists — edit it from the list below instead, or pick a different name.';
+
+    // Case-insensitive duplicate check - the bot itself matches triggers
+    // case-insensitively, so "ACF" and "acf" would collide at runtime even
+    // though they're different JS object keys here.
+    var existingKey = null;
+    Object.keys(commands).forEach(function (key) {
+      if (key.toLowerCase() === trigger.toLowerCase()) existingKey = key;
+    });
+
+    if (existingKey && existingKey !== editingTrigger) {
+      formStatus.textContent = '"' + existingKey + '" already exists (case-insensitive match) — edit it from the list below instead, or pick a different name.';
       formStatus.className = 'status err';
       return;
     }
